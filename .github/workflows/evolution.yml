@@ -1,0 +1,40 @@
+name: Evolution
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+jobs:
+  evolve:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Trigger evolution
+        env:
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          EVOLUTION_SECRET: ${{ secrets.EVOLUTION_SECRET }}
+        run: |
+          if [ -z "$APP_BASE_URL" ] || [ -z "$EVOLUTION_SECRET" ]; then
+            echo "Missing APP_BASE_URL or EVOLUTION_SECRET GitHub secret."
+            exit 1
+          fi
+
+          BASE_URL="${APP_BASE_URL%/}"
+          RESPONSE_FILE="$(mktemp)"
+
+          STATUS_CODE="$(curl --silent --show-error --location --write-out '%{http_code}' \
+            --output "$RESPONSE_FILE" \
+            --request GET \
+            --header "Authorization: Bearer $EVOLUTION_SECRET" \
+            --header "Accept: application/json" \
+            "$BASE_URL/api/evolution")"
+
+          cat "$RESPONSE_FILE"
+
+          if [ "$STATUS_CODE" -lt 200 ] || [ "$STATUS_CODE" -ge 300 ]; then
+            echo "Evolution request failed with status $STATUS_CODE."
+            exit 1
+          fi
+
+          node -e "const fs=require('fs'); const payload=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); if (payload.success === false) { console.error('Evolution completed with errors.'); process.exit(1); }" "$RESPONSE_FILE"
