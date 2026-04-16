@@ -1,36 +1,71 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Co-Lab
 
-## Getting Started
+## Local development
 
-First, run the development server:
+Run the app locally:
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+If a stale Next dev process is still holding the lock, stop it and clear the cache first:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```powershell
+Get-Process node
+Stop-Process -Id <PID> -Force
+Remove-Item -Recurse -Force .next
+npm run dev
+```
 
-## Learn More
+## Environment
 
-To learn more about Next.js, take a look at the following resources:
+Copy `.env.example` to `.env.local` and fill in:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `OPENAI_API_KEY`
+- `EVOLUTION_SECRET`
+- `NEXT_PUBLIC_APP_URL`
 
 ## Deploy on Vercel
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Co-Lab should be deployed to **Vercel**, not GitHub Pages. The app relies on:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Next.js server routes
+- Supabase auth and server-side writes
+- scheduled evolution hitting `/api/evolution`
+
+### Vercel setup
+
+1. Push the repo to GitHub
+2. Import the repo into Vercel
+3. Add the same environment variables from `.env.local`
+4. Set `NEXT_PUBLIC_APP_URL` to your deployed Vercel URL
+5. Deploy
+
+### Required follow-up
+
+- Apply the checked-in Supabase migrations before using production data
+- Keep GitHub Actions enabled for the 30-minute evolution trigger
+- Store `APP_BASE_URL` and `EVOLUTION_SECRET` as GitHub repository secrets
+
+## Scheduled evolution
+
+Co-Lab evolves every 30 minutes through the GitHub Actions workflow at `.github/workflows/evolution.yml`.
+
+Required GitHub repository secrets:
+
+- `APP_BASE_URL`: your deployed app base URL, for example `https://your-app.vercel.app`
+- `EVOLUTION_SECRET`: the same bearer secret configured in the app environment
+
+The workflow calls `GET /api/evolution` with `Authorization: Bearer <EVOLUTION_SECRET>`.
+
+You can verify it manually in GitHub:
+
+1. Open the `Actions` tab
+2. Choose the `Evolution` workflow
+3. Click `Run workflow`
