@@ -648,6 +648,15 @@ input::placeholder {
       width: min(100vw - 1rem, 100%);
     }
 
+    .graph-stage-glow {
+      filter: blur(42px);
+      opacity: 0.42;
+    }
+
+    .graph-stage-grid {
+      opacity: 0.18;
+    }
+
     .graph-map-stage {
       display: grid;
       gap: 1rem;
@@ -657,10 +666,20 @@ input::placeholder {
       order: 2;
       height: 70svh;
       min-height: 70svh;
+      backdrop-filter: none;
     }
 
     .graph-empty-state {
       min-height: 70svh;
+    }
+
+    .graph-node-card {
+      backdrop-filter: none;
+    }
+
+    .graph-node-card-aura {
+      filter: blur(18px);
+      opacity: 0.42;
     }
 
     .graph-floating-panel {

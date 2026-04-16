@@ -58,6 +58,7 @@ type GraphEdgeData = {
   relationshipType: string
   sourceLab: LabId
   targetLab: LabId
+  reducedEffects: boolean
 }
 
 type ConnectionDetail = {
@@ -404,9 +405,13 @@ function TraceEdge({
           strokeWidth: data.haloWidth,
           opacity: data.opacity * (data.selected ? 0.82 : data.hovered ? 0.56 : 0.32),
           strokeLinecap: 'round',
-          filter: data.selected || data.hovered ? 'drop-shadow(0 0 18px rgba(255,216,74,0.45))' : undefined,
+          filter:
+            !data.reducedEffects && (data.selected || data.hovered)
+              ? 'drop-shadow(0 0 18px rgba(255,216,74,0.45))'
+              : undefined,
           strokeDasharray: data.animated ? '12 16' : undefined,
           animation: data.animated ? 'graph-edge-flow 8s linear infinite' : undefined,
+          willChange: data.animated ? 'stroke-dashoffset' : undefined,
         }}
       />
       <BaseEdge
@@ -418,11 +423,12 @@ function TraceEdge({
           opacity: data.opacity,
           strokeLinecap: 'round',
           filter:
-            data.selected || data.hovered
+            !data.reducedEffects && (data.selected || data.hovered)
               ? 'drop-shadow(0 0 14px rgba(255,255,255,0.24))'
               : undefined,
           strokeDasharray: data.animated ? '12 16' : undefined,
           animation: data.animated ? 'graph-edge-flow 8s linear infinite' : undefined,
+          willChange: data.animated ? 'stroke-dashoffset' : undefined,
         }}
       />
     </>
@@ -446,6 +452,7 @@ function buildGraphElements(options: {
   hoveredEdgeId: string | null
   activeRelationships: Set<string>
   showCrossLab: boolean
+  reducedEffects: boolean
 }): GraphBuildResult {
   const filteredEdges = options.graphEdges.filter((edge) => {
     if (!options.activeRelationships.has(edge.relationship_type)) {
@@ -603,7 +610,8 @@ function buildGraphElements(options: {
       hasSelection &&
       !isSelectedEdge &&
       !(hasNodeSelection && selectedEdgeIds.has(edge.id))
-    const animated = crossLab && (confidence > 0.72 || isSelectedEdge || isHoveredEdge)
+    const animated =
+      !options.reducedEffects && crossLab && (confidence > 0.72 || isSelectedEdge || isHoveredEdge)
     const strokeBoost = isSelectedEdge ? 2.8 : isHoveredEdge ? 1.5 : 0
     const haloBoost = isSelectedEdge ? 10 : isHoveredEdge ? 6 : crossLab ? 4.8 : 2.8
     const opacity = hasSelection
@@ -638,6 +646,7 @@ function buildGraphElements(options: {
         relationshipType: edge.relationship_type,
         sourceLab: edge.source_lab as LabId,
         targetLab: edge.target_lab as LabId,
+        reducedEffects: options.reducedEffects,
       },
       interactionWidth: Math.max(baseWidth + 24, 28),
     }
@@ -754,6 +763,7 @@ function GraphWorkspaceInner() {
   const [flowInstance, setFlowInstance] = useState<ReactFlowInstance | null>(null)
   const [controlsOpen, setControlsOpen] = useState(true)
   const [inspectorOpen, setInspectorOpen] = useState(true)
+  const [reducedEffects, setReducedEffects] = useState(false)
 
   const visibleLabIds = useMemo(
     () => labSelectionOverride ?? new Set(requestedLabIds),
@@ -859,6 +869,7 @@ function GraphWorkspaceInner() {
     }
 
     const smallScreen = window.matchMedia('(max-width: 1023px)')
+    const coarsePointer = window.matchMedia('(pointer: coarse)')
 
     function syncPanels(event?: MediaQueryList | MediaQueryListEvent) {
       const matches = event ? event.matches : smallScreen.matches
@@ -866,11 +877,20 @@ function GraphWorkspaceInner() {
       setInspectorOpen(!matches)
     }
 
+    function syncEffects() {
+      setReducedEffects(smallScreen.matches || coarsePointer.matches)
+    }
+
     syncPanels(smallScreen)
+    syncEffects()
     smallScreen.addEventListener('change', syncPanels)
+    smallScreen.addEventListener('change', syncEffects)
+    coarsePointer.addEventListener('change', syncEffects)
 
     return () => {
       smallScreen.removeEventListener('change', syncPanels)
+      smallScreen.removeEventListener('change', syncEffects)
+      coarsePointer.removeEventListener('change', syncEffects)
     }
   }, [])
 
@@ -938,6 +958,7 @@ function GraphWorkspaceInner() {
           hoveredEdgeId,
           activeRelationships,
           showCrossLab,
+          reducedEffects,
         }),
       [
         activeRelationships,
@@ -947,6 +968,7 @@ function GraphWorkspaceInner() {
         hoveredEdgeId,
         selectedEdgeId,
         showCrossLab,
+        reducedEffects,
         visibleLabIds,
       ]
     )
