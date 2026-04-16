@@ -38,10 +38,12 @@ type GraphNodeData = {
   selected: boolean
   connected: boolean
   dimmed: boolean
+  bridge: boolean
   connectionScore: number
 }
 
 type GraphEdgeData = {
+  edgeId: string
   primaryColor: string
   haloColor: string
   strokeWidth: number
@@ -49,11 +51,25 @@ type GraphEdgeData = {
   opacity: number
   crossLab: boolean
   selected: boolean
+  hovered: boolean
+  dimmed: boolean
+  animated: boolean
+  confidencePercent: number
+  relationshipType: string
+  sourceLab: LabId
+  targetLab: LabId
 }
 
 type ConnectionDetail = {
   edge: EdgeRecord
   node: NodeRecord
+  confidence: number
+}
+
+type EdgeDetail = {
+  edge: EdgeRecord
+  sourceNode: NodeRecord
+  targetNode: NodeRecord
   confidence: number
 }
 
@@ -285,7 +301,7 @@ function GraphNodeCard({ data }: NodeProps<GraphNodeData>) {
 
   return (
     <div
-      className={`w-[15.25rem] rounded-[22px] border p-4 shadow-[0_18px_40px_rgba(0,0,0,0.3)] transition-all ${
+      className={`graph-node-card w-[15.25rem] rounded-[22px] border p-4 shadow-[0_18px_40px_rgba(0,0,0,0.3)] transition-all ${
         data.selected
           ? 'border-[var(--line-strong)] bg-[rgba(18,18,18,0.99)]'
           : data.connected
@@ -299,9 +315,18 @@ function GraphNodeCard({ data }: NodeProps<GraphNodeData>) {
           ? `0 0 0 1px ${lab.color}88, 0 20px 52px rgba(0, 0, 0, 0.44)`
           : data.connected
             ? `0 12px 34px ${lab.color}20`
-            : undefined,
+            : data.bridge
+              ? `0 12px 32px ${lab.color}18`
+              : undefined,
       }}
     >
+      <div
+        className="graph-node-card-aura"
+        style={{
+          background: `radial-gradient(circle at top, ${lab.color}30, transparent 62%)`,
+          opacity: data.selected ? 0.9 : data.connected || data.bridge ? 0.62 : 0.34,
+        }}
+      />
       <Handle type="target" position={Position.Top} className="!h-2 !w-2 !bg-[var(--signal)]" />
       <div className="flex items-center justify-between gap-3">
         <span
@@ -320,7 +345,9 @@ function GraphNodeCard({ data }: NodeProps<GraphNodeData>) {
           ? 'Tracing paths'
           : data.connected
             ? 'Connected node'
-            : data.connectionScore > 2.3
+            : data.bridge
+              ? 'Bridge point'
+              : data.connectionScore > 2.3
               ? 'Bridge point'
               : 'Network node'}
       </p>
@@ -359,13 +386,27 @@ function TraceEdge({
   return (
     <>
       <BaseEdge
+        id={`${id}-interaction`}
+        path={path}
+        interactionWidth={Math.max(data.strokeWidth + 24, 28)}
+        style={{
+          stroke: 'transparent',
+          strokeWidth: Math.max(data.strokeWidth + 24, 28),
+          opacity: 1,
+          cursor: 'pointer',
+        }}
+      />
+      <BaseEdge
         id={`${id}-halo`}
         path={path}
         style={{
           stroke: data.haloColor,
           strokeWidth: data.haloWidth,
-          opacity: data.opacity * (data.selected ? 0.72 : 0.34),
+          opacity: data.opacity * (data.selected ? 0.82 : data.hovered ? 0.56 : 0.32),
           strokeLinecap: 'round',
+          filter: data.selected || data.hovered ? 'drop-shadow(0 0 18px rgba(255,216,74,0.45))' : undefined,
+          strokeDasharray: data.animated ? '12 16' : undefined,
+          animation: data.animated ? 'graph-edge-flow 8s linear infinite' : undefined,
         }}
       />
       <BaseEdge
@@ -376,6 +417,12 @@ function TraceEdge({
           strokeWidth: data.strokeWidth,
           opacity: data.opacity,
           strokeLinecap: 'round',
+          filter:
+            data.selected || data.hovered
+              ? 'drop-shadow(0 0 14px rgba(255,255,255,0.24))'
+              : undefined,
+          strokeDasharray: data.animated ? '12 16' : undefined,
+          animation: data.animated ? 'graph-edge-flow 8s linear infinite' : undefined,
         }}
       />
     </>
@@ -395,6 +442,8 @@ function buildGraphElements(options: {
   graphEdges: EdgeRecord[]
   visibleLabIds: Set<LabId>
   selectedNodeId: string | null
+  selectedEdgeId: string | null
+  hoveredEdgeId: string | null
   activeRelationships: Set<string>
   showCrossLab: boolean
 }): GraphBuildResult {
@@ -413,6 +462,8 @@ function buildGraphElements(options: {
   const nodeScoreMap = computeNodeScoreMap(options.graphNodes, filteredEdges)
   const selectedEdgeIds = new Set<string>()
   const selectedNeighborIds = new Set<string>()
+  const highlightedNodeIds = new Set<string>()
+  const bridgeNodeIds = new Set<string>()
 
   if (options.selectedNodeId) {
     filteredEdges
@@ -427,7 +478,20 @@ function buildGraphElements(options: {
         selectedEdgeIds.add(edge.id)
         selectedNeighborIds.add(edge.source_node_id)
         selectedNeighborIds.add(edge.target_node_id)
+        highlightedNodeIds.add(edge.source_node_id)
+        highlightedNodeIds.add(edge.target_node_id)
       })
+
+    highlightedNodeIds.add(options.selectedNodeId)
+  }
+
+  if (options.selectedEdgeId) {
+    const selectedEdge = filteredEdges.find((edge) => edge.id === options.selectedEdgeId)
+    if (selectedEdge) {
+      selectedEdgeIds.add(selectedEdge.id)
+      highlightedNodeIds.add(selectedEdge.source_node_id)
+      highlightedNodeIds.add(selectedEdge.target_node_id)
+    }
   }
 
   const visibleIds = new Set<string>()
@@ -468,6 +532,8 @@ function buildGraphElements(options: {
     .forEach((edge) => {
       visibleIds.add(edge.source_node_id)
       visibleIds.add(edge.target_node_id)
+      bridgeNodeIds.add(edge.source_node_id)
+      bridgeNodeIds.add(edge.target_node_id)
     })
 
   if (options.selectedNodeId) {
@@ -487,13 +553,21 @@ function buildGraphElements(options: {
   const minConfidence = confidenceValues.length > 0 ? Math.min(...confidenceValues) : 0
   const maxConfidence = confidenceValues.length > 0 ? Math.max(...confidenceValues) : 1
   const positions = createDistrictLayout(visibleNodes, nodeScoreMap)
-  const hasSelection = Boolean(options.selectedNodeId)
+  const hasNodeSelection = Boolean(options.selectedNodeId)
+  const hasEdgeSelection = Boolean(options.selectedEdgeId)
+  const hasSelection = hasNodeSelection || hasEdgeSelection
 
   const reactNodes: Node<GraphNodeData>[] = visibleNodes.map((node) => {
     const center =
       positions.get(node.id) ?? createDistrictSeedPosition(node, nodeScoreMap.get(node.id) ?? 0)
-    const connected = node.id !== options.selectedNodeId && selectedNeighborIds.has(node.id)
-    const dimmed = hasSelection && node.id !== options.selectedNodeId && !connected
+    const connected =
+      (node.id !== options.selectedNodeId && selectedNeighborIds.has(node.id)) ||
+      (hasEdgeSelection && highlightedNodeIds.has(node.id) && node.id !== options.selectedNodeId)
+    const dimmed =
+      hasSelection &&
+      node.id !== options.selectedNodeId &&
+      !selectedNeighborIds.has(node.id) &&
+      !highlightedNodeIds.has(node.id)
 
     return {
       id: node.id,
@@ -510,6 +584,7 @@ function buildGraphElements(options: {
         selected: node.id === options.selectedNodeId,
         connected,
         dimmed,
+        bridge: bridgeNodeIds.has(node.id),
         connectionScore: nodeScoreMap.get(node.id) ?? 0,
       },
     }
@@ -518,27 +593,53 @@ function buildGraphElements(options: {
   const reactEdges: Edge<GraphEdgeData>[] = visibleEdges.map((edge) => {
     const crossLab = edge.is_cross_lab
     const isSelectedEdge = selectedEdgeIds.has(edge.id)
+    const isHoveredEdge = edge.id === options.hoveredEdgeId
     const relationshipColor = RELATIONSHIP_COLORS[edge.relationship_type]
     const confidence = normalizeConfidence(edge.confidence_score, minConfidence, maxConfidence)
-    const baseOpacity = crossLab ? 0.22 + confidence * 0.55 : 0.12 + confidence * 0.24
-    const baseWidth = crossLab ? 1.5 + confidence * 3.8 : 1.1 + confidence * 2.3
-    const mutedOpacity = crossLab ? 0.09 : 0.045
+    const baseOpacity = crossLab ? 0.2 + confidence * 0.54 : 0.08 + confidence * 0.2
+    const baseWidth = crossLab ? 1.8 + confidence * 4.1 : 1 + confidence * 2.2
+    const mutedOpacity = crossLab ? 0.11 : 0.038
+    const dimmed =
+      hasSelection &&
+      !isSelectedEdge &&
+      !(hasNodeSelection && selectedEdgeIds.has(edge.id))
+    const animated = crossLab && (confidence > 0.72 || isSelectedEdge || isHoveredEdge)
+    const strokeBoost = isSelectedEdge ? 2.8 : isHoveredEdge ? 1.5 : 0
+    const haloBoost = isSelectedEdge ? 10 : isHoveredEdge ? 6 : crossLab ? 4.8 : 2.8
+    const opacity = hasSelection
+      ? isSelectedEdge
+        ? 1
+        : hasNodeSelection && selectedEdgeIds.has(edge.id)
+          ? Math.max(baseOpacity, 0.72)
+          : mutedOpacity
+      : isHoveredEdge
+        ? Math.min(baseOpacity + 0.22, 0.9)
+        : baseOpacity
 
     return {
       id: edge.id,
       source: edge.source_node_id,
       target: edge.target_node_id,
       type: 'trace',
-      zIndex: isSelectedEdge ? 20 : crossLab ? 8 : 3,
+      zIndex: isSelectedEdge ? 30 : isHoveredEdge ? 20 : crossLab ? 8 : 3,
       data: {
+        edgeId: edge.id,
         primaryColor: crossLab ? '#ffd84a' : relationshipColor,
         haloColor: crossLab ? '#ff8f6b' : `${relationshipColor}66`,
-        strokeWidth: isSelectedEdge ? baseWidth + 2.4 : baseWidth,
-        haloWidth: isSelectedEdge ? baseWidth + 8 : baseWidth + (crossLab ? 4.2 : 2.4),
-        opacity: hasSelection ? (isSelectedEdge ? 0.98 : mutedOpacity) : baseOpacity,
+        strokeWidth: baseWidth + strokeBoost,
+        haloWidth: baseWidth + haloBoost,
+        opacity,
         crossLab,
         selected: isSelectedEdge,
+        hovered: isHoveredEdge,
+        dimmed,
+        animated,
+        confidencePercent: Math.round(edge.confidence_score * 100),
+        relationshipType: edge.relationship_type,
+        sourceLab: edge.source_lab as LabId,
+        targetLab: edge.target_lab as LabId,
       },
+      interactionWidth: Math.max(baseWidth + 24, 28),
     }
   })
 
@@ -591,6 +692,44 @@ function buildConnectionDetails(
     .slice(0, 8)
 }
 
+function buildSelectedEdgeDetail(
+  selectedEdgeId: string | null,
+  graphNodes: NodeRecord[],
+  graphEdges: EdgeRecord[],
+  activeRelationships: Set<string>,
+  showCrossLab: boolean
+) {
+  if (!selectedEdgeId) {
+    return null
+  }
+
+  const edge = graphEdges.find(
+    (item) =>
+      item.id === selectedEdgeId &&
+      activeRelationships.has(item.relationship_type) &&
+      (showCrossLab || !item.is_cross_lab)
+  )
+
+  if (!edge) {
+    return null
+  }
+
+  const nodeMap = new Map(graphNodes.map((node) => [node.id, node]))
+  const sourceNode = nodeMap.get(edge.source_node_id)
+  const targetNode = nodeMap.get(edge.target_node_id)
+
+  if (!sourceNode || !targetNode) {
+    return null
+  }
+
+  return {
+    edge,
+    sourceNode,
+    targetNode,
+    confidence: edge.confidence_score,
+  } satisfies EdgeDetail
+}
+
 function GraphWorkspaceInner() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -603,6 +742,8 @@ function GraphWorkspaceInner() {
   const [graphNodes, setGraphNodes] = useState<NodeRecord[]>([])
   const [graphEdges, setGraphEdges] = useState<EdgeRecord[]>([])
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
+  const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [labSelectionOverride, setLabSelectionOverride] = useState<Set<LabId> | null>(null)
   const [activeRelationships, setActiveRelationships] = useState<Set<string>>(
@@ -698,6 +839,10 @@ function GraphWorkspaceInner() {
       setSelectedNodeId((current) =>
         current && combinedNodeIds.has(current) ? current : null
       )
+      setSelectedEdgeId((current) =>
+        current && (loadedEdges ?? []).some((edge) => edge.id === current) ? current : null
+      )
+      setHoveredEdgeId(null)
       setLoading(false)
     }
 
@@ -757,6 +902,18 @@ function GraphWorkspaceInner() {
     [effectiveSelectedNodeId, graphNodes]
   )
 
+  const selectedEdge = useMemo(
+    () =>
+      buildSelectedEdgeDetail(
+        selectedEdgeId,
+        graphNodes,
+        graphEdges,
+        activeRelationships,
+        showCrossLab
+      ),
+    [activeRelationships, graphEdges, graphNodes, selectedEdgeId, showCrossLab]
+  )
+
   const selectedConnections = useMemo(
     () =>
       buildConnectionDetails(
@@ -777,6 +934,8 @@ function GraphWorkspaceInner() {
           graphEdges,
           visibleLabIds,
           selectedNodeId: effectiveSelectedNodeId,
+          selectedEdgeId,
+          hoveredEdgeId,
           activeRelationships,
           showCrossLab,
         }),
@@ -785,6 +944,8 @@ function GraphWorkspaceInner() {
         effectiveSelectedNodeId,
         graphEdges,
         graphNodes,
+        hoveredEdgeId,
+        selectedEdgeId,
         showCrossLab,
         visibleLabIds,
       ]
@@ -846,11 +1007,37 @@ function GraphWorkspaceInner() {
     setActiveRelationships(new Set(RELATIONSHIP_TYPES))
     showAllLabs()
     setSelectedNodeId(null)
+    setSelectedEdgeId(null)
+    setHoveredEdgeId(null)
     flowInstance?.fitView({ duration: 350, padding: 0.08 })
   }
 
   function focusSelectedNode() {
-    if (!flowInstance || !effectiveSelectedNodeId) {
+    if (!flowInstance) {
+      return
+    }
+
+    if (selectedEdge) {
+      const sourceNode = reactNodes.find((item) => item.id === selectedEdge.sourceNode.id)
+      const targetNode = reactNodes.find((item) => item.id === selectedEdge.targetNode.id)
+
+      if (!sourceNode || !targetNode) {
+        return
+      }
+
+      flowInstance.setCenter(
+        (sourceNode.position.x + targetNode.position.x) / 2 + NODE_WIDTH / 2,
+        (sourceNode.position.y + targetNode.position.y) / 2 + NODE_HEIGHT / 2,
+        {
+          zoom: 0.82,
+          duration: 350,
+        }
+      )
+
+      return
+    }
+
+    if (!effectiveSelectedNodeId) {
       return
     }
 
@@ -872,7 +1059,18 @@ function GraphWorkspaceInner() {
       return next
     })
     setSelectedNodeId(node.id)
+    setSelectedEdgeId(null)
     setSearch('')
+  }
+
+  function selectNode(nodeId: string) {
+    setSelectedNodeId(nodeId)
+    setSelectedEdgeId(null)
+  }
+
+  function selectEdge(edgeId: string) {
+    setSelectedEdgeId(edgeId)
+    setSelectedNodeId(null)
   }
 
   return (
@@ -894,6 +1092,11 @@ function GraphWorkspaceInner() {
       </div>
 
       <section className="graph-map-shell">
+        <div className="graph-stage-atmosphere" aria-hidden="true">
+          <span className="graph-stage-glow graph-stage-glow-left" />
+          <span className="graph-stage-glow graph-stage-glow-right" />
+          <span className="graph-stage-grid" />
+        </div>
         <div className="graph-map-toolbar">
           <div className="flex flex-wrap items-center gap-2">
             <button
@@ -935,7 +1138,16 @@ function GraphWorkspaceInner() {
                 minZoom={0.22}
                 maxZoom={1.5}
                 onInit={setFlowInstance}
-                onNodeClick={(_, node) => setSelectedNodeId(node.id)}
+                onNodeClick={(_, node) => selectNode(node.id)}
+                onEdgeClick={(_, edge) => selectEdge(edge.id)}
+                onEdgeMouseEnter={(_, edge) => setHoveredEdgeId(edge.id)}
+                onEdgeMouseLeave={(_, edge) =>
+                  setHoveredEdgeId((current) => (current === edge.id ? null : current))
+                }
+                onPaneClick={() => {
+                  setSelectedNodeId(null)
+                  setSelectedEdgeId(null)
+                }}
                 className="graph-map-surface"
               >
                 <MiniMap
@@ -1074,12 +1286,89 @@ function GraphWorkspaceInner() {
                   <span className="text-sm text-white">AI-origin node</span>
                   <span className="signal-button px-3 py-1 text-[0.58rem] font-medium">AI</span>
                 </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-sm text-white">Clickable trace</span>
+                  <span className="rounded-full border border-[rgba(255,255,255,0.14)] px-3 py-1 text-[0.62rem] uppercase tracking-[0.18em] text-[var(--dim)]">
+                    Tap line
+                  </span>
+                </div>
               </div>
             </section>
 
             <section className="panel panel-strong p-5 sm:p-6">
-              <p className="signal-label">Selected node</p>
-              {selectedNode ? (
+              <div className="flex items-center justify-between gap-3">
+                <p className="signal-label">
+                  {selectedEdge ? 'Selected connection' : selectedNode ? 'Selected node' : 'Inspector'}
+                </p>
+                {(selectedNode || selectedEdge) && (
+                  <button
+                    onClick={() => {
+                      setSelectedNodeId(null)
+                      setSelectedEdgeId(null)
+                    }}
+                    className="ghost-button px-3 py-2 text-[0.68rem]"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+              {selectedEdge ? (
+                <>
+                  <div className="mt-4 flex flex-wrap items-center gap-2.5">
+                    <span className="ghost-button px-3 py-1 text-[0.68rem] capitalize">
+                      {selectedEdge.edge.relationship_type.replace(/_/g, ' ')}
+                    </span>
+                    <span className="signal-button px-3 py-1 text-[0.6rem] font-medium">
+                      {Math.round(selectedEdge.confidence * 100)}% confidence
+                    </span>
+                    <span className="ghost-button px-3 py-1 text-[0.68rem]">
+                      {selectedEdge.edge.is_cross_lab ? 'Cross-lab bridge' : 'Same-lab link'}
+                    </span>
+                  </div>
+
+                  <div className="mt-5 grid gap-3">
+                    {[selectedEdge.sourceNode, selectedEdge.targetNode].map((node, index) => {
+                      const lab = LAB_MAP[node.lab as LabId]
+                      return (
+                        <div key={node.id} className="graph-inspector-card">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="mono-label">{index === 0 ? 'Source' : 'Target'}</span>
+                            <span
+                              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--line)] px-2.5 py-1 text-[0.68rem]"
+                              style={{ background: `${lab.color}22`, color: lab.color }}
+                            >
+                              <LabIcon labId={lab.id} className="h-3.5 w-3.5" />
+                              {lab.name}
+                            </span>
+                            {node.origin === 'ai' ? (
+                              <span className="signal-button px-2.5 py-1 text-[0.56rem] font-medium">
+                                AI
+                              </span>
+                            ) : null}
+                          </div>
+                          <p className="mt-3 text-sm text-[var(--text)]">
+                            {previewContent(node.content, 170)}
+                          </p>
+                          <div className="mt-4 flex flex-wrap gap-2.5">
+                            <button
+                              onClick={() => selectNode(node.id)}
+                              className="ghost-button px-3 py-2 text-[0.68rem]"
+                            >
+                              Inspect node
+                            </button>
+                            <button
+                              onClick={() => router.push(`/node/${node.id}`)}
+                              className="signal-button px-3 py-2 text-[0.68rem]"
+                            >
+                              Open thread
+                            </button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </>
+              ) : selectedNode ? (
                 <>
                   <div className="mt-4 flex flex-wrap items-center gap-2.5">
                     <span
@@ -1110,7 +1399,7 @@ function GraphWorkspaceInner() {
                           return (
                             <button
                               key={edge.id}
-                              onClick={() => setSelectedNodeId(node.id)}
+                              onClick={() => selectEdge(edge.id)}
                               className="panel panel-interactive w-full p-4 text-left"
                             >
                               <div className="flex flex-wrap items-center gap-2">
@@ -1167,9 +1456,26 @@ function GraphWorkspaceInner() {
                   </div>
                 </>
               ) : (
-                <p className="secondary-copy mt-4 text-sm">
-                  Pick a node to trace where it connects and jump into the thread from there.
-                </p>
+                <div className="graph-empty-inspector mt-4">
+                  <p className="text-sm text-white">Choose what to inspect.</p>
+                  <p className="secondary-copy mt-2 text-sm">
+                    Click a node to trace its strongest paths, or click any connection line to inspect the bridge itself.
+                  </p>
+                  <div className="mt-4 grid gap-3 text-sm text-[var(--muted)]">
+                    <div className="graph-inspector-tip">
+                      <span className="mono-label">01</span>
+                      <span>Cross-lab bridges glow brightest and now support direct click selection.</span>
+                    </div>
+                    <div className="graph-inspector-tip">
+                      <span className="mono-label">02</span>
+                      <span>Use Focus selected after choosing a node or connection to center the action.</span>
+                    </div>
+                    <div className="graph-inspector-tip">
+                      <span className="mono-label">03</span>
+                      <span>Reset view returns the graph to the full overview without sacrificing the live atmosphere.</span>
+                    </div>
+                  </div>
+                </div>
               )}
             </section>
           </aside>
